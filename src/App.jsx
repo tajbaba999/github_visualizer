@@ -5,7 +5,7 @@ import { GitBranch } from "lucide-react";
 const GitHubRepoVisualizer = () => {
   const [repoUrl, setRepoUrl] = useState("");
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [branches, setBranches] = useState([]);
+  const [repoData, setRepoData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const svgRef = useRef(null);
@@ -19,6 +19,12 @@ const GitHubRepoVisualizer = () => {
     return null;
   };
 
+  const shortenDescription = (desc, maxLength = 20) => {
+    return desc.length > maxLength
+      ? desc.substring(0, maxLength - 3) + "..."
+      : desc;
+  };
+
   const fetchRepoData = async (owner, repo) => {
     try {
       setLoading(true);
@@ -30,21 +36,38 @@ const GitHubRepoVisualizer = () => {
       if (!branchesResponse.ok) throw new Error("Failed to fetch branches");
       const branchesData = await branchesResponse.json();
 
-      const branchesWithCommits = await Promise.all(
-        branchesData.map(async (branch) => {
-          const commitsResponse = await fetch(
-            `https://api.github.com/repos/${owner}/${repo}/commits?sha=${branch.name}&per_page=5`
-          );
-          if (!commitsResponse.ok) throw new Error("Failed to fetch commits");
-          const commitsData = await commitsResponse.json();
-          return {
-            name: branch.name,
-            commits: commitsData.map((commit) => commit.commit.message),
-          };
-        })
-      );
+      const nodes = [];
+      const links = [];
 
-      setBranches(branchesWithCommits);
+      // Add main branch
+      nodes.push({ id: "main", group: 1, size: 20 });
+
+      for (const branch of branchesData) {
+        if (branch.name !== "main") {
+          nodes.push({ id: branch.name, group: 2, size: 15 });
+          links.push({ source: "main", target: branch.name });
+        }
+
+        const commitsResponse = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/commits?sha=${branch.name}&per_page=5`
+        );
+        if (!commitsResponse.ok) throw new Error("Failed to fetch commits");
+        const commitsData = await commitsResponse.json();
+
+        commitsData.forEach((commit, index) => {
+          const commitId = `${branch.name}-commit-${index}`;
+          nodes.push({
+            id: commitId,
+            name: shortenDescription(commit.commit.message),
+            author: commit.commit.author.name,
+            group: 3,
+            size: 10,
+          });
+          links.push({ source: branch.name, target: commitId });
+        });
+      }
+
+      setRepoData({ nodes, links });
     } catch (err) {
       setError(
         err.message || "Failed to fetch repository data. Please check the URL."
@@ -65,10 +88,10 @@ const GitHubRepoVisualizer = () => {
   };
 
   useEffect(() => {
-    if (isSubmitted && branches.length > 0) {
+    if (isSubmitted && repoData) {
       createVisualization();
     }
-  }, [isSubmitted, branches]);
+  }, [isSubmitted, repoData]);
 
   const createVisualization = () => {
     const svg = d3.select(svgRef.current);
@@ -77,44 +100,32 @@ const GitHubRepoVisualizer = () => {
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
 
-    // Create nodes and links data
-    const nodes = branches.map((branch) => ({
-      id: branch.name,
-      commits: branch.commits,
-    }));
-    const links = branches
-      .filter((branch) => branch.name !== "main")
-      .map((branch) => ({ source: "main", target: branch.name }));
-
-    // Create a force simulation
     const simulation = d3
-      .forceSimulation(nodes)
+      .forceSimulation(repoData.nodes)
       .force(
         "link",
         d3
-          .forceLink(links)
+          .forceLink(repoData.links)
           .id((d) => d.id)
           .distance(100)
       )
       .force("charge", d3.forceManyBody().strength(-300))
       .force("center", d3.forceCenter(width / 2, height / 2));
 
-    // Create links
     const link = svg
       .append("g")
       .selectAll("line")
-      .data(links)
+      .data(repoData.links)
       .enter()
       .append("line")
       .attr("stroke", "#999")
       .attr("stroke-opacity", 0.6)
-      .attr("stroke-width", 2);
+      .attr("stroke-width", (d) => Math.sqrt(d.value));
 
-    // Create nodes
     const node = svg
       .append("g")
       .selectAll("g")
-      .data(nodes)
+      .data(repoData.nodes)
       .enter()
       .append("g")
       .call(
@@ -125,23 +136,24 @@ const GitHubRepoVisualizer = () => {
           .on("end", dragended)
       );
 
-    // Add circles to nodes
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+
     node
       .append("circle")
-      .attr("r", 10)
-      .attr("fill", (d) => (d.id === "main" ? "#fd8d3c" : "#56b4e9"));
+      .attr("r", (d) => d.size)
+      .attr("fill", (d) => color(d.group));
 
-    // Add labels to nodes
+    node
+      .append("title")
+      .text((d) => (d.author ? `${d.name}\nAuthor: ${d.author}` : d.id));
+
     node
       .append("text")
       .attr("dx", 12)
       .attr("dy", ".35em")
-      .text((d) => d.id);
+      .text((d) => d.name || d.id)
+      .style("font-size", (d) => `${Math.max(8, d.size / 2)}px`);
 
-    // Add title for hover effect
-    node.append("title").text((d) => `${d.id}\nCommits: ${d.commits.length}`);
-
-    // Update positions on each tick of the simulation
     simulation.on("tick", () => {
       link
         .attr("x1", (d) => d.source.x)
@@ -152,22 +164,21 @@ const GitHubRepoVisualizer = () => {
       node.attr("transform", (d) => `translate(${d.x},${d.y})`);
     });
 
-    // Drag functions
-    function dragstarted(event, d) {
+    function dragstarted(event) {
       if (!event.active) simulation.alphaTarget(0.3).restart();
-      d.fx = d.x;
-      d.fy = d.y;
+      event.subject.fx = event.subject.x;
+      event.subject.fy = event.subject.y;
     }
 
-    function dragged(event, d) {
-      d.fx = event.x;
-      d.fy = event.y;
+    function dragged(event) {
+      event.subject.fx = event.x;
+      event.subject.fy = event.y;
     }
 
-    function dragended(event, d) {
+    function dragended(event) {
       if (!event.active) simulation.alphaTarget(0);
-      d.fx = null;
-      d.fy = null;
+      event.subject.fx = null;
+      event.subject.fy = null;
     }
   };
 
@@ -214,11 +225,11 @@ const GitHubRepoVisualizer = () => {
               Repository: {repoUrl}
             </h2>
             {loading ? (
-              <p>Loading branches and commits...</p>
+              <p>Loading repository data...</p>
             ) : error ? (
               <p className="text-red-500">{error}</p>
             ) : (
-              <svg ref={svgRef} width="100%" height="600" />
+              <svg ref={svgRef} width="100%" height="800" />
             )}
           </div>
         )}
