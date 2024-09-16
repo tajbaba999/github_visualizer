@@ -76,54 +76,99 @@ const GitHubRepoVisualizer = () => {
 
     const width = svgRef.current.clientWidth;
     const height = svgRef.current.clientHeight;
-    const margin = { top: 20, right: 90, bottom: 30, left: 90 };
 
-    const g = svg
+    // Create nodes and links data
+    const nodes = branches.map((branch) => ({
+      id: branch.name,
+      commits: branch.commits,
+    }));
+    const links = branches
+      .filter((branch) => branch.name !== "main")
+      .map((branch) => ({ source: "main", target: branch.name }));
+
+    // Create a force simulation
+    const simulation = d3
+      .forceSimulation(nodes)
+      .force(
+        "link",
+        d3
+          .forceLink(links)
+          .id((d) => d.id)
+          .distance(100)
+      )
+      .force("charge", d3.forceManyBody().strength(-300))
+      .force("center", d3.forceCenter(width / 2, height / 2));
+
+    // Create links
+    const link = svg
       .append("g")
-      .attr("transform", `translate(${margin.left},${margin.top})`);
+      .selectAll("line")
+      .data(links)
+      .enter()
+      .append("line")
+      .attr("stroke", "#999")
+      .attr("stroke-opacity", 0.6)
+      .attr("stroke-width", 2);
 
-    const tree = d3
-      .tree()
-      .size([
-        height - margin.top - margin.bottom,
-        width - margin.left - margin.right,
-      ]);
-
-    // Create a hierarchical structure
-    const root = d3
-      .stratify()
-      .id((d) => d.name)
-      .parentId((d) => (d.name === "main" ? null : "main"))(branches);
-
-    const treeData = tree(root);
-
-    // Add links between the nodes
-
-    // Add nodes
-    const node = g
-      .selectAll(".node")
-      .data(treeData.descendants())
+    // Create nodes
+    const node = svg
+      .append("g")
+      .selectAll("g")
+      .data(nodes)
       .enter()
       .append("g")
-      .attr(
-        "class",
-        (d) => "node" + (d.children ? " node--internal" : " node--leaf")
-      )
-      .attr("transform", (d) => `translate(${d.y},${d.x})`);
+      .call(
+        d3
+          .drag()
+          .on("start", dragstarted)
+          .on("drag", dragged)
+          .on("end", dragended)
+      );
 
-    // Add circles for the nodes
+    // Add circles to nodes
     node
       .append("circle")
       .attr("r", 10)
-      .style("fill", (d) => (d.data.name === "main" ? "#fd8d3c" : "#56b4e9"));
+      .attr("fill", (d) => (d.id === "main" ? "#fd8d3c" : "#56b4e9"));
 
-    // Add labels for the nodes
+    // Add labels to nodes
     node
       .append("text")
+      .attr("dx", 12)
       .attr("dy", ".35em")
-      .attr("x", (d) => (d.children ? -13 : 13))
-      .style("text-anchor", (d) => (d.children ? "end" : "start"))
-      .text((d) => d.data.name);
+      .text((d) => d.id);
+
+    // Add title for hover effect
+    node.append("title").text((d) => `${d.id}\nCommits: ${d.commits.length}`);
+
+    // Update positions on each tick of the simulation
+    simulation.on("tick", () => {
+      link
+        .attr("x1", (d) => d.source.x)
+        .attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x)
+        .attr("y2", (d) => d.target.y);
+
+      node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+    });
+
+    // Drag functions
+    function dragstarted(event, d) {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x;
+      d.fy = d.y;
+    }
+
+    function dragged(event, d) {
+      d.fx = event.x;
+      d.fy = event.y;
+    }
+
+    function dragended(event, d) {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null;
+      d.fy = null;
+    }
   };
 
   return (
