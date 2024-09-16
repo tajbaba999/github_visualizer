@@ -1,12 +1,14 @@
-import { useState } from "react";
-import { GitBranch, GitCommit } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import * as d3 from "d3";
+import { GitBranch } from "lucide-react";
 
 const GitHubRepoVisualizer = () => {
   const [repoUrl, setRepoUrl] = useState("");
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [branches, setBranches] = useState([]);
-  const [loading, setLoading] = useState(false); // Track loading state
-  const [error, setError] = useState(""); // Track errors
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const svgRef = useRef(null);
 
   const extractRepoInfo = (url) => {
     const regex = /https:\/\/github.com\/([\w-]+)\/([\w-]+)/;
@@ -22,18 +24,18 @@ const GitHubRepoVisualizer = () => {
       setLoading(true);
       setError("");
 
-      // Fetch branches from GitHub API
       const branchesResponse = await fetch(
         `https://api.github.com/repos/${owner}/${repo}/branches`
       );
+      if (!branchesResponse.ok) throw new Error("Failed to fetch branches");
       const branchesData = await branchesResponse.json();
 
       const branchesWithCommits = await Promise.all(
         branchesData.map(async (branch) => {
-          // Fetch the last 5 commits for each branch
           const commitsResponse = await fetch(
             `https://api.github.com/repos/${owner}/${repo}/commits?sha=${branch.name}&per_page=5`
           );
+          if (!commitsResponse.ok) throw new Error("Failed to fetch commits");
           const commitsData = await commitsResponse.json();
           return {
             name: branch.name,
@@ -43,9 +45,10 @@ const GitHubRepoVisualizer = () => {
       );
 
       setBranches(branchesWithCommits);
-      // eslint-disable-next-line no-unused-vars
     } catch (err) {
-      setError("Failed to fetch repository data. Please check the URL.");
+      setError(
+        err.message || "Failed to fetch repository data. Please check the URL."
+      );
     } finally {
       setLoading(false);
     }
@@ -61,12 +64,70 @@ const GitHubRepoVisualizer = () => {
     }
   };
 
+  useEffect(() => {
+    if (isSubmitted && branches.length > 0) {
+      createVisualization();
+    }
+  }, [isSubmitted, branches]);
+
+  const createVisualization = () => {
+    const svg = d3.select(svgRef.current);
+    svg.selectAll("*").remove(); // Clear previous content
+
+    const width = svgRef.current.clientWidth;
+    const height = svgRef.current.clientHeight;
+    const margin = { top: 20, right: 90, bottom: 30, left: 90 };
+
+    const g = svg
+      .append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`);
+
+    const tree = d3
+      .tree()
+      .size([
+        height - margin.top - margin.bottom,
+        width - margin.left - margin.right,
+      ]);
+
+    // Create a hierarchical structure
+    const root = d3
+      .stratify()
+      .id((d) => d.name)
+      .parentId((d) => (d.name === "main" ? null : "main"))(branches);
+
+    const treeData = tree(root);
+
+    // Add links between the nodes
+
+    // Add nodes
+    const node = g
+      .selectAll(".node")
+      .data(treeData.descendants())
+      .enter()
+      .append("g")
+      .attr(
+        "class",
+        (d) => "node" + (d.children ? " node--internal" : " node--leaf")
+      )
+      .attr("transform", (d) => `translate(${d.y},${d.x})`);
+
+    // Add circles for the nodes
+    node
+      .append("circle")
+      .attr("r", 10)
+      .style("fill", (d) => (d.data.name === "main" ? "#fd8d3c" : "#56b4e9"));
+
+    // Add labels for the nodes
+    node
+      .append("text")
+      .attr("dy", ".35em")
+      .attr("x", (d) => (d.children ? -13 : 13))
+      .style("text-anchor", (d) => (d.children ? "end" : "start"))
+      .text((d) => d.data.name);
+  };
+
   return (
-    <div
-      className={`min-h-screen bg-blue-100 ${
-        !isSubmitted && "backdrop-blur-md"
-      } flex items-center justify-center`}
-    >
+    <div className="min-h-screen bg-blue-100 flex items-center justify-center">
       <div className="container mx-auto px-4 py-8">
         {!isSubmitted ? (
           <div className="max-w-md mx-auto bg-white p-8 shadow-2xl rounded-xl">
@@ -112,32 +173,7 @@ const GitHubRepoVisualizer = () => {
             ) : error ? (
               <p className="text-red-500">{error}</p>
             ) : (
-              branches.map((branch) => (
-                <div
-                  key={branch.name}
-                  className="bg-white border rounded-lg p-4 shadow-md"
-                >
-                  <div className="flex items-center mb-2">
-                    <GitBranch className="mr-2 text-indigo-600" />
-                    <span className="font-semibold text-lg">{branch.name}</span>
-                  </div>
-                  <div className="pl-6 space-y-2">
-                    {branch.commits.length > 0 ? (
-                      branch.commits.map((commit, commitIndex) => (
-                        <div key={commitIndex} className="flex items-center">
-                          <GitCommit
-                            className="mr-2 text-green-600"
-                            size={16}
-                          />
-                          <span className="text-sm">{commit}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p>No commits found for this branch.</p>
-                    )}
-                  </div>
-                </div>
-              ))
+              <svg ref={svgRef} width="100%" height="600" />
             )}
           </div>
         )}
