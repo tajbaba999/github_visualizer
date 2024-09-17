@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import * as d3 from "d3";
 import { GitBranch } from "lucide-react";
 
@@ -9,6 +9,7 @@ const GitHubRepoVisualizer = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const svgRef = useRef(null);
+  const containerRef = useRef(null);
 
   const extractRepoInfo = (url) => {
     const regex = /https:\/\/github.com\/([\w-]+)\/([\w-]+)/;
@@ -30,8 +31,15 @@ const GitHubRepoVisualizer = () => {
       setLoading(true);
       setError("");
 
+      const token = import.meta.env.VITE_GITHUB;
+
       const branchesResponse = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/branches`
+        `https://api.github.com/repos/${owner}/${repo}/branches`,
+        {
+          headers: {
+            Authorization: `token ${token}`,
+          },
+        }
       );
       if (!branchesResponse.ok) throw new Error("Failed to fetch branches");
       const branchesData = await branchesResponse.json();
@@ -39,7 +47,6 @@ const GitHubRepoVisualizer = () => {
       const nodes = [];
       const links = [];
 
-      // Add main branch
       nodes.push({ id: "main", group: 1, size: 20 });
 
       for (const branch of branchesData) {
@@ -49,7 +56,12 @@ const GitHubRepoVisualizer = () => {
         }
 
         const commitsResponse = await fetch(
-          `https://api.github.com/repos/${owner}/${repo}/commits?sha=${branch.name}&per_page=5`
+          `https://api.github.com/repos/${owner}/${repo}/commits?sha=${branch.name}&per_page=5`,
+          {
+            headers: {
+              Authorization: `token ${token}`,
+            },
+          }
         );
         if (!commitsResponse.ok) throw new Error("Failed to fetch commits");
         const commitsData = await commitsResponse.json();
@@ -95,10 +107,12 @@ const GitHubRepoVisualizer = () => {
 
   const createVisualization = () => {
     const svg = d3.select(svgRef.current);
-    svg.selectAll("*").remove(); // Clear previous content
+    svg.selectAll("*").remove();
 
-    const width = svgRef.current.clientWidth;
-    const height = svgRef.current.clientHeight;
+    const containerWidth = containerRef.current.clientWidth;
+    const containerHeight = Math.max(600, window.innerHeight * 0.7);
+
+    svg.attr("width", containerWidth).attr("height", containerHeight);
 
     const simulation = d3
       .forceSimulation(repoData.nodes)
@@ -110,7 +124,8 @@ const GitHubRepoVisualizer = () => {
           .distance(100)
       )
       .force("charge", d3.forceManyBody().strength(-300))
-      .force("center", d3.forceCenter(width / 2, height / 2));
+      .force("center", d3.forceCenter(containerWidth / 2, containerHeight / 2))
+      .force("collision", d3.forceCollide().radius(30));
 
     const link = svg
       .append("g")
@@ -180,14 +195,23 @@ const GitHubRepoVisualizer = () => {
       event.subject.fx = null;
       event.subject.fy = null;
     }
+
+    const zoom = d3
+      .zoom()
+      .scaleExtent([0.5, 5])
+      .on("zoom", (event) => {
+        svg.selectAll("g").attr("transform", event.transform);
+      });
+
+    svg.call(zoom);
   };
 
   return (
-    <div className="min-h-screen bg-blue-100 flex items-center justify-center">
+    <div className="min-h-screen bg-gradient-to-br from-sky-200 to-teal-800 flex items-center justify-center">
       <div className="container mx-auto px-4 py-8">
         {!isSubmitted ? (
-          <div className="max-w-md mx-auto bg-white p-8 shadow-2xl rounded-xl">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">
+          <div className="max-w-md mx-auto bg-gradient-to-br from-indigo-300 to-yellow-100 p-8 shadow-2xl rounded-xl">
+            <h2 className="text-2xl font-bold mb-4 text-neutral-600">
               GitHub Repository Visualizer
             </h2>
             <label
@@ -197,39 +221,43 @@ const GitHubRepoVisualizer = () => {
               Provide the GitHub Repository Link
             </label>
             <div className="flex rounded-md shadow-sm">
-              <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">
+              <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-800 bg-gray-50 text-gray-500 text-sm">
                 <GitBranch className="h-5 w-5" />
               </span>
               <input
                 type="text"
                 name="repo-url"
                 id="repo-url"
-                className="focus:ring-indigo-500 focus:border-indigo-500 flex-1 block w-full rounded-none rounded-r-md sm:text-sm border-gray-300"
+                className="focus:ring-indigo-500 focus:border-indigo-500 flex-1 block w-full rounded-none rounded-r-md sm:text-sm border-gray-800"
                 placeholder="https://github.com/username/repository"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 required
               />
             </div>
-            {error && <p className="text-red-500 mt-2">{error}</p>}
+            {error && <p className="text-red-300 mt-2">{error}</p>}
             <button
               onClick={handleSubmit}
-              className="mt-4 w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded hover:bg-indigo-700 transition duration-150 ease-in-out"
+              className="mt-4 w-full bg-slate-800 text-white font-bold py-2 px-4 rounded hover:bg-slate-500 transition duration-150 ease-in-out"
             >
               Visualize Repository
             </button>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-4 bg-neutral-300 p-8 rounded-xl shadow-2xl">
             <h2 className="text-3xl font-bold mb-6 text-gray-800">
               Repository: {repoUrl}
             </h2>
             {loading ? (
-              <p>Loading repository data...</p>
+              <p className="text-xl text-gray-600">
+                Loading repository data...
+              </p>
             ) : error ? (
-              <p className="text-red-500">{error}</p>
+              <p className="text-red-500 text-xl">{error}</p>
             ) : (
-              <svg ref={svgRef} width="100%" height="800" />
+              <div ref={containerRef} className="w-full relative">
+                <svg ref={svgRef} className="w-full" />
+              </div>
             )}
           </div>
         )}
